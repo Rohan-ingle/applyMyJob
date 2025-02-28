@@ -1,5 +1,5 @@
 import re
-from langchain.llms import Ollama
+from langchain_community.llms import Ollama
 from fpdf import FPDF
 
 class ResumePDF(FPDF):
@@ -18,7 +18,7 @@ class ResumePDF(FPDF):
         self.set_text_color(128, 128, 128)
         self.cell(0, 10, f'Page {self.page_no()}', align='C')
 
-def generate_resume(name, contact, summary, experience, education, skills):
+def generate_resume(name, contact, summary, experience, education, skills, additional_info=None):
     formatted_experience = experience.replace(" * ", " • ")
     
     prompt = f"""
@@ -36,18 +36,22 @@ Education: {education}
 
 Skills: {skills}
 
-Please output the resume in a clear, modern format with sections and bullet points where appropriate.
-Use '•' instead of '*' for bullet points.
+additional_info: {additional_info}
+
+Do not say anything except the resume contents. Please output the resume in a clear, modern format with sections and bullet points where appropriate.
+Use '-' instead of '*' or '•' for bullet points.
 """
     llm = Ollama(model="llama3.2:1b")
-    resume = llm(prompt)
+    resume = llm.invoke(prompt)
     return resume
 
 def save_resume_to_pdf(resume_text, title="Resume", filename="resume.pdf"):
-    pdf = ResumePDF()
-
+    pdf = ResumePDF('P', 'mm', 'A4')
+    
     try:
         pdf.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True)
+        pdf.add_font('DejaVu', 'B', 'DejaVuSans-Bold.ttf', uni=True)
+        pdf.add_font('DejaVu', 'I', 'DejaVuSans-Oblique.ttf', uni=True)
         body_font = 'DejaVu'
         header_font = 'DejaVu'
     except Exception as e:
@@ -65,6 +69,8 @@ def save_resume_to_pdf(resume_text, title="Resume", filename="resume.pdf"):
     
     pdf.ln(10)
     
+    resume_text = resume_text.replace('•', '-')
+    
     lines = resume_text.split('\n')
     for line in lines:
         clean_line = line.strip()
@@ -81,28 +87,39 @@ def save_resume_to_pdf(resume_text, title="Resume", filename="resume.pdf"):
             pdf.set_font(body_font, size=12)
             pdf.set_text_color(0, 0, 0)
         else:
-            pdf.multi_cell(0, 10, txt=clean_line)
+            is_bullet_point = clean_line.startswith('- ')
+            indentation = 0
+            if is_bullet_point:
+                indentation = 5
+                
+            clean_line = re.sub(r'\*\*(.*?)\*\*', lambda m: f'<b>{m.group(1)}</b>', clean_line)
+            clean_line = re.sub(r'\*(.*?)\*', lambda m: f'<i>{m.group(1)}</i>', clean_line)
+            
+            if is_bullet_point:
+                pdf.set_x(pdf.get_x() + indentation)
+                
+            if '<b>' not in clean_line and '<i>' not in clean_line:
+                pdf.multi_cell(0, 10, txt=clean_line)
+            else:
+                parts = re.split(r'(<b>|</b>|<i>|</i>)', clean_line)
+                current_x = pdf.get_x()
+                line_started = False
+                
+                for part in parts:
+                    if part == '<b>':
+                        pdf.set_font(body_font, 'B', 12)
+                    elif part == '</b>':
+                        pdf.set_font(body_font, '', 12)
+                    elif part == '<i>':
+                        pdf.set_font(body_font, 'I', 12)
+                    elif part == '</i>':
+                        pdf.set_font(body_font, '', 12)
+                    elif part:
+                        if not line_started:
+                            pdf.multi_cell(0, 10, txt=part)
+                            line_started = True
+                        else:
+                            pdf.write(10, part)
     
     pdf.output(filename)
     print(f"Resume saved to {filename}")
-
-if __name__ == '__main__':
-    name = "Jane Doe"
-    contact = "jane.doe@example.com | (555) 123-4567"
-    summary = ("Dynamic and results-oriented professional with over 5 years of experience in software development, "
-               "machine learning, and data analysis. Passionate about leveraging technology to solve real-world problems.")
-    experience = (
-        "Software Engineer at Tech Innovators Inc. (2018-2023):\n"
-        " * Developed scalable web applications using Python and JavaScript.\n"
-        " * Led a team of developers to design and implement microservices.\n\n"
-        "Junior Developer at CodeWorks (2016-2018):\n"
-        " * Assisted in developing mobile applications and improving legacy systems."
-    )
-    education = "B.Sc. in Computer Science, University of Technology (2012-2016)"
-    skills = "Python, JavaScript, React, Docker, Kubernetes, Machine Learning, Agile Methodologies"
-
-    resume_text = generate_resume(name, contact, summary, experience, education, skills)
-    print("Generated Resume:\n")
-    print(resume_text)
-    
-    save_resume_to_pdf(resume_text, title=name, filename="resume_template.pdf")
